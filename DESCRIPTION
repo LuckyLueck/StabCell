@@ -1,0 +1,39 @@
+Package: StabCell
+Type: Package
+Title: StabCell: Stable Clustering & Differential Expression for Single-cell RNA Sequencing Data
+Version: 0.1.0
+Authors@R: c(
+              person("Niklas", "Lück", role = c("aut", "cre"),
+                     email="lueck@statistik.tu-dortmund.de"),
+              person("Christian", "Staerk", role = "aut",
+                     email="staerk@statistik.tu-dortmund.de")
+           )
+Maintainer: Niklas Lück <lueck@statistik.tu-dortmund.de>
+Description: StabCell allows the generation of stable clusterings and sets of
+             differentially expressed genes. It applies concepts from stability
+             selection to arbitrary clustering and marker detection methods and
+             offers an integrated approach for modelling.
+URL: https://github.com/LuckyLueck/StabCell
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
+Imports: 
+    doRNG,
+    dplyr,
+    foreach,
+    Matrix,
+    methods,
+    progressr,
+    tidyr
+Suggests:
+    doFuture,
+    future,
+    ggplot2,
+    knitr,
+    kableExtra,
+    RhpcBLASctl,
+    Seurat,
+    rmarkdown,
+    splatter
+VignetteBuilder: knitr

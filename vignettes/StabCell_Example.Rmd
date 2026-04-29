@@ -1,0 +1,242 @@
+---
+title: "StabCell Example"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{StabCell_Example}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+options(future.globals.maxSize=10 * 1024^3, future.seed=TRUE)
+```
+
+## Data Simulation
+
+We use the R package `splatter` to simulate scRNA-seq data to be analyzed in this example.
+
+```{r simulation, warning=FALSE, message=FALSE}
+library(splatter)
+
+seed <- 1234
+set.seed(seed)
+
+params <- newSplatParams(
+  # see: https://bioconductor.org/packages/release/bioc/vignettes/splatter/inst/doc/splat_params.html
+  
+  seed=seed,
+  
+  nGenes=500,
+  batchCells=1000,
+  
+  # cell types
+  group.prob=1, # only 1 true cell population
+  
+  # library size (= counts per cell)
+  lib.loc=10,
+  lib.scale=0.2,
+  
+  # dropout probabilities
+  dropout.type="experiment",
+  dropout.mid=50,
+  dropout.shape=5e-2,
+  
+  # differential expression
+  de.prob=0.01,
+  de.downProb=0.5,
+  de.facLoc=0.4,
+  de.facScale=0.4,
+)
+
+sim <- splatSimulate(
+  params,
+  method="groups",
+  verbose=FALSE
+)
+count_data <- counts(sim)
+count_data <- as(count_data, "CsparseMatrix") # for seurat
+
+true_idents <- as.factor(substr(colData(sim)$Group, 6, 10))
+```
+
+We use `Seurat` to obtain an initial clustering and save UMAP embeddings for later plotting.
+
+```{r initial_idents, warning=FALSE, message=FALSE}
+library(Seurat)
+
+seurat_obj <- CreateSeuratObject(counts=count_data)
+seurat_obj <- NormalizeData(seurat_obj, verbose=FALSE)
+seurat_obj <- FindVariableFeatures(seurat_obj, verbose=FALSE)
+seurat_obj <- ScaleData(seurat_obj, verbose=FALSE)
+seurat_obj <- RunPCA(seurat_obj, verbose=FALSE)
+seurat_obj <- FindNeighbors(seurat_obj, verbose=FALSE)
+seurat_obj <- FindClusters(seurat_obj, verbose=FALSE)
+seurat_obj <- RunUMAP(seurat_obj, dims=1:10, verbose=FALSE)
+
+umap <- Embeddings(seurat_obj, reduction="umap")
+initial_idents <- Idents(seurat_obj)
+```
+
+## StabCell
+
+For StabCell we first need to define a clustering and a testing function which are applied to the individual subsamples. We once again use `Seurat` functions for this.
+
+```{r cluster_fn}
+cluster_fn <- function(data, subsample_indices=NULL, cluster_args=NULL){
+  seurat_obj <- CreateSeuratObject(counts=data)
+  seurat_obj <- NormalizeData(seurat_obj, verbose=FALSE)
+  seurat_obj <- FindVariableFeatures(seurat_obj, verbose=FALSE)
+  seurat_obj <- ScaleData(seurat_obj, verbose=FALSE)
+  seurat_obj <- RunPCA(seurat_obj, verbose=FALSE)
+  seurat_obj <- FindNeighbors(seurat_obj, verbose=FALSE)
+  seurat_obj <- FindClusters(seurat_obj, verbose=FALSE)
+  identities <- Idents(seurat_obj)
+  return(identities)
+}
+
+test_fn <- function(data, identities, weights, test_id1, test_id2=NULL, test_args=NULL){
+  # cannot test cluster against itself
+  # --> check for cluster collision
+  if((!is.null(test_id2)) && (test_id1 == test_id2)){
+    p_values <- rep(1., nrow(data))
+    names(p_values) <- rownames(data)
+    return(p_values)
+  } else {
+    # prepare seurat object
+    seurat_obj <- CreateSeuratObject(counts=data)
+    seurat_obj <- NormalizeData(seurat_obj, verbose=FALSE)
+    Idents(seurat_obj) <- identities
+    
+    markers <- FindMarkers(
+      seurat_obj, ident.1=test_id1, ident.2=test_id2, test.use="wilcox",
+      logfc.threshold=0.0, min.pct=0., # no pre-selection of genes
+      verbose=FALSE
+    )
+    
+    # format results
+    p_values <- markers$p_val_adj
+    names(p_values) <- rownames(markers)
+  }
+  
+  return(p_values)
+}
+```
+
+If you want to make use of StabCell's parallelization, you need to register `doFuture` with an appropriate plan as your backend.
+
+```{r parallel, warning=FALSE, message=FALSE}
+library(doFuture)
+library(RhpcBLASctl)
+
+blas_set_num_threads(4)
+plan(multicore, workers=50)
+registerDoFuture()
+```
+
+We can now run StabCell. Using `progressr`'s `with_progress()` will display progress bars.
+
+```{r stabcell, warning=FALSE}
+library(StabCell)
+library(progressr)
+
+with_progress({
+  stabcell_results <- StabCell(
+      data=count_data,
+      reference_identities=initial_idents,
+      cluster_fn=cluster_fn,
+      test_fn=test_fn,
+      assumption="r_concavity",
+      PFER_max=25,
+      subsampling_iterations=50,
+      test_global=TRUE,
+      test_local=FALSE,
+      packages=c("Seurat"),    # packages that are needed for clustering or testing
+      verbose=TRUE
+    )
+})
+```
+
+## Results
+
+StabCell returns many intermediate results, which may come in handy. Let's have a look!
+
+```{r list_results}
+names(stabcell_results)
+```
+
+We can compare the different clusterings...
+
+```{r plot_clusterings, fig.width=8, fig.height=6, out.width="100%"}
+library(ggplot2)
+
+plot_clustering <- function(coords, idents, title=""){
+  if(length(idents) == 0){ idents <- rep("0", nrow(coords)) }
+  p_umap <- ggplot() +
+    geom_point(data=coords, mapping=aes(x=umap_1, y=umap_2, color=idents), size=0.1) +
+    theme_void() + 
+    theme(legend.position="none") +
+    labs(title=title)
+  p_hist <- ggplot() +
+    geom_bar(data=data.frame(Cluster=idents), mapping=aes(x=Cluster, fill=Cluster)) +
+    theme_minimal() +
+    theme(legend.position="none", panel.grid=element_blank()) +
+    labs(y="# Cells") +
+    coord_cartesian(ylim=c(0, nrow(coords)))
+  return(p_umap / p_hist)
+}
+
+p_true <- plot_clustering(coords=umap, idents=true_idents, title="True Clustering")
+p_init <- plot_clustering(coords=umap, idents=initial_idents, title="Initial Clustering")
+p_stabcell <- plot_clustering(coords=umap, idents=stabcell_results$clustering_mode, title="Stable Clustering")
+p_true | p_init | p_stabcell
+```
+
+… see how stable the individual clusters are …
+
+```{r, fig.width=8, fig.height=4, out.width="100%"}
+ggplot(
+  data=data.frame(
+    cluster=stabcell_results$clustering_mode,
+    cell_stability_score=stabcell_results$cell_stability_score
+  ),
+  mapping=aes(fill=cluster, y=cell_stability_score, x=cluster)
+) +
+  geom_violin() +
+  labs(y="Cell Stability Score", x="StabCell Cluster") +
+  coord_cartesian(ylim=c(0, 1)) +
+  theme_minimal() +
+  theme(
+    legend.position="none",
+    panel.grid.minor=element_blank(),
+    panel.grid.major.x=element_blank()
+  )
+```
+
+... and inspect the stable markers.
+
+```{r stable_markers}
+library(dplyr)
+
+stabcell_results$stable_markers_global %>%
+  arrange(id, desc(selection_freq)) %>%
+  knitr::kable() %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed")) %>%
+  kableExtra::scroll_box(width="100%")
+```
+
+#### Conclusion
+
+-   The naive clustering generates many spurious clusters.
+-   StabCell can reduce the number of spurious clusters.
+-   All StabCell clusters are unstable and should be treated with care.
+-   For each of the remaining spurious clusters we observe fewer than the specified `PFER_max = 25` markers, which should also be treated with care due to the unstable clustering.
+
+#### Session Info
+
+```{r session_info}
+sessionInfo()
+```
