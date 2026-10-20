@@ -1,38 +1,34 @@
 citHeader("To cite package 'StabCell' in publications use:")
 
 year <- 2026
-vers <- "0.1.0"
+vers <- "0.1.1"
 
 bibentry(
          bibtype="Manual",
-         key="LueckStabCell",
-         title="{StabCell}: Stable Clustering & Differential Expression for Single-cell {RNA} Sequencing Data",
-         author=c(as.person("Niklas L\\\"uck"), as.person("Christian Staerk")),
+         key="StabCellSoftware",
+         title="{StabCell}: Stability selection for single-cell {RNA} sequencing",
+         author=c(as.person("Niklas L\\\"uck"), as.person("Andrea Rossi"), as.person("Christian Staerk")),
          year=year,
          note=paste("{R} package version", vers),
          url="https://github.com/LuckyLueck/StabCell",
          textVersion=paste0(
-             "Niklas Lück and Christian Staerk (", year,"). ",
-             "StabCell: Stability Selection with Error Control, ",
+             "Niklas Lück, Andrea Rossi, and Christian Staerk (", year,"). ",
+             "StabCell: Stability selection for clustering and marker detection in single-cell RNA sequencing, ",
              "R package version ", vers,", ",
              "https://github.com/LuckyLueck/StabCell."
          )
 )
 
-# bibentry(
-#          bibtype="misc",
-#          key="Lueck2026",
-#          title="{StabCell}: Stability selection for clustering and marker detection in single-cell {RNA}-seq",
-#          author=c(
-#             as.person("Niklas L\\\"uck"),
-#             as.person("Andrea Rossi"),
-#             as.person("Christian Staerk")
-#          ),
-#          year="2026",
-#          number="arXiv:TODO",
-#          eprint="TODO",
-#          primaryclass="stat",
-#          publisher="arXiv",
-#          doi="TODO",
-#          archiveprefix="arXiv"
-# )
+bibentry(
+        bibtype="Article",
+        key="StabCellArticle",
+        title="{StabCell}: Stability selection for clustering and marker detection in single-cell {RNA} sequencing",
+        author=c(
+           as.person("Niklas L\\\"uck"),
+           as.person("Andrea Rossi"),
+           as.person("Christian Staerk")
+        ),
+        year=year,
+        journal="bioRxiv",
+        doi="https://doi.org/10.64898/2026.05.07.720061"
+)
