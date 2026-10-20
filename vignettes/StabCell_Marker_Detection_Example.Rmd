@@ -1,8 +1,8 @@
 ---
-title: "StabCell Example"
+title: "StabCell Marker Detection Example"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{StabCell_Example}
+  %\VignetteIndexEntry{StabCell_Marker_Detection_Example}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -98,10 +98,10 @@ cluster_fn <- function(data, subsample_indices=NULL, cluster_args=NULL){
   return(identities)
 }
 
-test_fn <- function(data, identities, weights, test_id1, test_id2=NULL, test_args=NULL){
+marker_fn <- function(data, identities, weights, cluster_id1, cluster_id2=NULL, marker_args=NULL){
   # cannot test cluster against itself
   # --> check for cluster collision
-  if((!is.null(test_id2)) && (test_id1 == test_id2)){
+  if((!is.null(cluster_id2)) && (cluster_id1 == cluster_id2)){
     p_values <- rep(1., nrow(data))
     names(p_values) <- rownames(data)
     return(p_values)
@@ -112,7 +112,7 @@ test_fn <- function(data, identities, weights, test_id1, test_id2=NULL, test_arg
     Idents(seurat_obj) <- identities
     
     markers <- FindMarkers(
-      seurat_obj, ident.1=test_id1, ident.2=test_id2, test.use="wilcox",
+      seurat_obj, ident.1=cluster_id1, ident.2=cluster_id2, test.use="wilcox",
       logfc.threshold=0.0, min.pct=0., # no pre-selection of genes
       verbose=FALSE
     )
@@ -129,12 +129,12 @@ test_fn <- function(data, identities, weights, test_id1, test_id2=NULL, test_arg
 If you want to make use of StabCell's parallelization, you need to register `doFuture` with an appropriate plan as your backend.
 
 ```{r parallel, warning=FALSE, message=FALSE}
-library(doFuture)
-library(RhpcBLASctl)
-
-blas_set_num_threads(4)
-plan(multicore, workers=50)
-registerDoFuture()
+# library(doFuture)
+# library(RhpcBLASctl)
+# 
+# blas_set_num_threads(4)
+# plan(multicore, workers=50)
+# registerDoFuture()
 ```
 
 We can now run StabCell. Using `progressr`'s `with_progress()` will display progress bars.
@@ -148,12 +148,12 @@ with_progress({
       data=count_data,
       reference_identities=initial_idents,
       cluster_fn=cluster_fn,
-      test_fn=test_fn,
+      marker_fn=marker_fn,
       assumption="r_concavity",
       PFER_max=25,
       subsampling_iterations=50,
-      test_global=TRUE,
-      test_local=FALSE,
+      marker_global=TRUE,
+      marker_local=FALSE,
       packages=c("Seurat"),    # packages that are needed for clustering or testing
       verbose=TRUE
     )
@@ -191,7 +191,7 @@ plot_clustering <- function(coords, idents, title=""){
 
 p_true <- plot_clustering(coords=umap, idents=true_idents, title="True Clustering")
 p_init <- plot_clustering(coords=umap, idents=initial_idents, title="Initial Clustering")
-p_stabcell <- plot_clustering(coords=umap, idents=stabcell_results$clustering_mode, title="Stable Clustering")
+p_stabcell <- plot_clustering(coords=umap, idents=stabcell_results$stable_clustering, title="Stable Clustering")
 p_true | p_init | p_stabcell
 ```
 
@@ -200,7 +200,7 @@ p_true | p_init | p_stabcell
 ```{r, fig.width=8, fig.height=4, out.width="100%"}
 ggplot(
   data=data.frame(
-    cluster=stabcell_results$clustering_mode,
+    cluster=stabcell_results$stable_clustering,
     cell_stability_score=stabcell_results$cell_stability_score
   ),
   mapping=aes(fill=cluster, y=cell_stability_score, x=cluster)
@@ -219,12 +219,10 @@ ggplot(
 ... and inspect the stable markers.
 
 ```{r stable_markers}
-library(dplyr)
-
-stabcell_results$stable_markers_global %>%
-  arrange(id, desc(selection_freq)) %>%
-  knitr::kable() %>%
-  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed")) %>%
+stabcell_results$stable_markers_global |>
+  dplyr::arrange(id, desc(selection_freq)) |>
+  knitr::kable() |>
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed")) |>
   kableExtra::scroll_box(width="100%")
 ```
 

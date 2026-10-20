@@ -15,15 +15,20 @@
 #'
 #' @keywords internal
 run_step <- function(checkpoint, step_index, steps_to_run, step_name, step_fn) {
-  # Check if the current step is in steps_to_run
+  # Check if the current step needs to be run
   if (
     !(step_index %in% steps_to_run)
-    || (step_name %in% names(checkpoint))
+    || ((step_name %in% names(checkpoint)) & !is.null(checkpoint[[step_name]]))
   ) {
-    # returns NULL if "step_index" not in "steps_to_run" and "step_name" not in "checkpoint"
-    return(checkpoint[[step_name]])
+    return(list(result=checkpoint, success=TRUE))
   } else {
-      return(step_fn())
+    tryCatch(
+      expr={ return(list(result=step_fn(), success=TRUE)) },
+      error=function(e) {
+        warning("Error in step ", step_name, ":\n", conditionMessage(e), "\n")
+        return(list(result=checkpoint, success=FALSE))
+      }
+    )
   }
 }
 
@@ -52,37 +57,37 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
              required_variables <- c(required_variables, "subsampling_identities")
            },
            { # 3
-             created_variables <- c(created_variables, "assignment_probabilities")
+             created_variables <- c(created_variables, "assignment_frequencies")
              required_variables <- c(required_variables, "subsampling_identities", "clustering_alignment")
            },
            { # 4
-             created_variables <- c(created_variables, "clustering_mode")
-             required_variables <- c(required_variables, "assignment_probabilities")
+             created_variables <- c(created_variables, "stable_clustering")
+             required_variables <- c(required_variables, "assignment_frequencies")
            },
            { # 5
              created_variables <- c(created_variables, "cell_stability_score")
-             required_variables <- c(required_variables, "assignment_probabilities")
+             required_variables <- c(required_variables, "assignment_frequencies")
            },
            { # 6
              created_variables <- c(created_variables, "marker_alignment")
-             required_variables <- c(required_variables, "clustering_mode", "subsampling_identities")
+             required_variables <- c(required_variables, "subsampling_identities")
            },
            { # 7
              created_variables <- c(created_variables, "subsampling_p_values")
-             required_variables <- c(required_variables, "clustering_mode", "subsampling_identities",
+             required_variables <- c(required_variables, "subsampling_identities",
                                      "marker_alignment", "cell_stability_score")
            },
            { # 8
-             created_variables <- c(created_variables, "selection_frequencies")
+             created_variables <- c(created_variables, "marker_selection_frequencies")
              required_variables <- c(required_variables, "subsampling_p_values")
            },
            { # 9
              created_variables <- c(created_variables, "stable_markers_global")
-             required_variables <- c(required_variables, "selection_frequencies")
+             required_variables <- c(required_variables, "marker_selection_frequencies")
            },
            { # 10
              created_variables <- c(created_variables, "stable_markers_local")
-             required_variables <- c(required_variables, "selection_frequencies")
+             required_variables <- c(required_variables, "marker_selection_frequencies")
            }
     )
   }
@@ -99,6 +104,8 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
   return(invisible())
 }
 
+abort_message <- function(){ warning("Skip potential successive steps and return results so far!") }
+
 #' StabCell
 #'
 #' This function performs an integrative workflow of clustering and detection of
@@ -106,12 +113,12 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #' \enumerate{
 #'    \item \code{\link{SubsampleClustering}}
 #'    \item \code{\link{ClusterStabilityAlignment}}
-#'    \item \code{\link{CalculateAssignmentProbabilities}}
-#'    \item \code{\link{GetSubsampleClusteringMode}}
+#'    \item \code{\link{CalculateAssignmentFrequencies}}
+#'    \item \code{\link{FindStableClustering}}
 #'    \item \code{\link{CalculateCellStabilityScore}}
 #'    \item \code{\link{MarkerStabilityAlignment}}
-#'    \item \code{\link{SubsampleTesting}}
-#'    \item \code{\link{CalculateSelectionFrequency}}
+#'    \item \code{\link{SubsampleMarkers}}
+#'    \item \code{\link{CalculateMarkerSelectionFrequency}}
 #'    \item \code{\link{FindAllGlobalStableMarkers}}
 #'    \item \code{\link{FindAllLocalStableMarkers}}
 #' }
@@ -136,7 +143,7 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #'        It must return a **numeric** or **factor** vector of cluster labels for
 #'        each observation in the subsample. Factor labels will be disregarded for
 #'        their numeric level indicator.
-#' @param test_fn A function which calculates \eqn{p}-values for a subsample of
+#' @param marker_fn A function which calculates \eqn{p}-values for a subsample of
 #'        the dataset. It is required to have the following correctly named
 #'        arguments:
 #'        \itemize{
@@ -145,24 +152,24 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #'          \item \code{weights}: The observation stability scores will be
 #'                handed over for weighted testing. Can be ignored in the function
 #'                body if unweighted testing is desired.
-#'          \item \code{test_id1}: A single cluster label from in \code{identities}
+#'          \item \code{cluster_id1}: A single cluster label from in \code{identities}
 #'                for which the test is performed.
-#'          \item \code{test_id2}: A single cluster label from in \code{identities}
+#'          \item \code{cluster_id2}: A single cluster label from in \code{identities}
 #'                for which the test is performed. If \code{NA} is used, a global
-#'                (1 vs rest) test for cluster \code{test_id1} should be performed,
-#'                otherwise a local (1 vs 1) test for clusters \code{test_id1}
-#'                and \code{test_id2} should be performed.
-#'          \item \code{test_args}: Additional arguments that may be used.
+#'                (1 vs rest) test for cluster \code{cluster_id1} should be performed,
+#'                otherwise a local (1 vs 1) test for clusters \code{cluster_id1}
+#'                and \code{cluster_id2} should be performed.
+#'          \item \code{marker_args}: Additional arguments that may be used.
 #'        }
 #'        It should return a named vector of \eqn{p}-values with the corresponding
 #'        gene as name.
 #' @param cluster_args Additional objects that will be passed to \code{cluster_fn}.
 #'        Defaults to \code{NULL}.
-#' @param test_args Additional objects that will be passed to \code{test_fn}.
+#' @param marker_args Additional objects that will be passed to \code{marker_fn}.
 #'        Defaults to \code{NULL}.
-#' @param test_global A boolean flag whether to perform testing for global markers
+#' @param marker_global A boolean flag whether to perform testing for global markers
 #'        (1 vs rest). Defaults to \code{TRUE}.
-#' @param test_local A boolean flag whether to perform testing for local markers
+#' @param marker_local A boolean flag whether to perform testing for local markers
 #'        (1 vs 1). Defaults to \code{FALSE}.
 #' @param PFER_max The maximum number of expected variables with low selection
 #'        probability being selected.
@@ -201,10 +208,10 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #'        of \code{data} correspond to observations (i.e. cells) or not. Defaults
 #'        to \code{TRUE}.
 #' @param packages A character vector of package names that are used by
-#'        \code{cluster_fn} and \code{test_fn}. Needed for parallelization worker
+#'        \code{cluster_fn}, \code{marker_fn} or \code{graph_fn}. Needed for parallelization worker
 #'        setup. Common choice may be \code{"Seurat"}. Defaults to \code{NULL}.
 #' @param export A character vector of (custom) object names that are used by
-#'        \code{cluster_fn} & \code{test_fn} and are not covered by
+#'        \code{cluster_fn} & \code{marker_fn} and are not covered by
 #'        \code{packages}. Needed for parallelization worker setup. Defaults to
 #'        \code{NULL}.
 #' @param steps_to_run A vector of integers indicating which of the analysis steps
@@ -227,28 +234,28 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #'            \item \code{clustering_alignment}: A data frame which aligns a
 #'                  cluster from \code{reference_identities} to every cluster in
 #'                  every subsample clustering.
-#'            \item \code{assignment_probabilities}: A data frame with assignment
-#'                  probabilities for every observation to every cluster in
+#'            \item \code{assignment_frequencies}: A data frame with assignment
+#'                  frequencies for every observation to every cluster in
 #'                  \code{reference_identities}.
-#'            \item \code{clustering_mode}: A vector of cluster labels
-#'                  corresponding to the highest \code{assignment_probabilities}.
+#'            \item \code{stable_clustering}: A vector of cluster labels
+#'                  corresponding to the highest \code{assignment_frequencies}.
 #'            \item \code{cell_stability_score}: A numeric vector with
 #'                  stability scores of every cell. Higher scores indicate more
 #'                  consistent assignment to the same reference cluster.
 #'            \item \code{marker_alignment}: A data frame which aligns a cluster
-#'                  from every subsample to every cluster in \code{clustering_mode}.
+#'                  from every subsample to every cluster in \code{stable_clustering}.
 #'            \item \code{subsampling_p_values}: A data frame with \eqn{p}-values
-#'                  for every cluster (pair) in \code{clustering_mode} and every
+#'                  for every cluster (pair) in \code{stable_clustering} and every
 #'                  gene in every subsample.
-#'            \item \code{selection_frequencies}: A data frame with selection
+#'            \item \code{marker_selection_frequencies}: A data frame with selection
 #'                  frequencies for every gene and every cluster (pair) depending
 #'                  on \code{p_value_threshold}.
 #'            \item \code{stable_markers_global}: A data frame with globally
-#'                  stable markers for each cluster in \code{clustering_mode}
+#'                  stable markers for each cluster in \code{stable_clustering}
 #'                  depending on \code{p_value_threshold} and
-#'                  \code{selection_frequency_threshold}.
+#'                  \code{marker_selection_frequency_threshold}.
 #'            \item \code{stable_markers_local}: A data frame with locally stable
-#'                  markers for each pair of clusters in \code{clustering_mode}
+#'                  markers for each pair of clusters in \code{stable_clustering}
 #'                  depending on \code{p_value_threshold} and
 #'                  \code{selection_frequency_threshold}.
 #'         }
@@ -256,16 +263,16 @@ validate_checkpoint <- function(steps_to_run, checkpoint){
 #' @export
 StabCell <- function(
     data,
-    reference_identities,
     cluster_fn,
-    test_fn,
     PFER_max,
+    reference_identities=NULL,
+    marker_fn=NULL,
     p_value_threshold=0.05,
     n_subsample_markers=NULL,
     cluster_args=NULL,
-    test_args=NULL,
-    test_global=TRUE,
-    test_local=FALSE,
+    marker_args=NULL,
+    marker_global=TRUE,
+    marker_local=FALSE,
     subsampling_iterations=50,
     subsampling_fraction=0.5,
     complementary_pairs=TRUE,
@@ -289,18 +296,47 @@ StabCell <- function(
   if(is.null(steps_to_run)){
     steps_to_run <- 1:10
   }
+  if(is.null(marker_fn) & 7 %in% steps_to_run){
+    stop("`marker_fn` required for testing steps!")
+  }
 
+  # checkpoint preparation and validation
   if(is.null(checkpoint)){
     # start from empty checkpoint
     checkpoint <- list()
-  } else {
-    # check if checkpoint is valid for specified steps
-    validate_checkpoint(checkpoint=checkpoint, steps_to_run=steps_to_run)
   }
-
+  if(!is.null(reference_identities)){
+    if(!is.null(checkpoint[["reference_identities"]])){
+      stop("Reference identities provided via argument and checkpoint!")
+    }
+    checkpoint[["reference_identities"]] <- reference_identities
+  } else if (is.null(checkpoint[["reference_identities"]])){
+    if(verbose) message("calculate reference identities...\n")
+    reference_identities <- cluster_fn(
+      data=data,
+      subsample_indices=TRUE,
+      cluster_args=cluster_args
+    )
+    checkpoint[["reference_identities"]] <- reference_identities
+  }
+  if(
+    !("cell_stability_score" %in% names(checkpoint))
+    && !(5 %in% steps_to_run)
+    && any(c(7) %in% steps_to_run)
+  ){
+    warning(paste0(
+      "`cell_stability_score` required for marker detection",
+      "but neither available from checkpoint nor being calculated in `steps_to_run`. ",
+      "Using constant `cell_stability_score = 1.0` for all cells."
+      )
+    )
+    n_cells <- if(cells_in_columns) ncol(data) else nrow(data)
+    checkpoint[["cell_stability_score"]] <- rep(1.0, n_cells)
+  }
+  validate_checkpoint(checkpoint=checkpoint, steps_to_run=steps_to_run)
 
   # Clustering
-  subsampling_identities <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=1,
     steps_to_run=steps_to_run,
@@ -314,19 +350,22 @@ StabCell <- function(
         subsampling_fraction=subsampling_fraction,
         subsampling_iterations=subsampling_iterations,
         complementary_pairs=complementary_pairs,
-        observations_in_columns=cells_in_columns,
+        cells_in_columns=cells_in_columns,
         packages=packages,
         export=export
       )
       checkpoint[["subsampling_identities"]] <<- subsampling_identities
 
       if(!is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(subsampling_identities)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
+
 
   # Clustering Stability
-  clustering_alignment <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=2,
     steps_to_run=steps_to_run,
@@ -334,63 +373,72 @@ StabCell <- function(
     step_fn=function(){
       if(verbose) message("clustering stability...\n")
       clustering_alignment <- ClusterStabilityAlignment(
-        reference_identities=reference_identities,
-        subsampling_identities=subsampling_identities
+        reference_identities=checkpoint[["reference_identities"]],
+        subsampling_identities=checkpoint[["subsampling_identities"]]
       )
       checkpoint[["clustering_alignment"]] <<- clustering_alignment
-      return(clustering_alignment)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
-  assignment_probabilities <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=3,
     steps_to_run=steps_to_run,
-    step_name="assignment_probabilities",
+    step_name="assignment_frequencies",
     step_fn=function(){
-      assignment_probabilities <- CalculateAssignmentProbabilities(
-        subsampling_identities=subsampling_identities,
-        clustering_alignment=clustering_alignment
+      assignment_frequencies <- CalculateAssignmentFrequencies(
+        subsampling_identities=checkpoint[["subsampling_identities"]],
+        clustering_alignment=checkpoint[["clustering_alignment"]]
       )
-      checkpoint[["assignment_probabilities"]] <<- assignment_probabilities
-      return(assignment_probabilities)
+      checkpoint[["assignment_frequencies"]] <<- assignment_frequencies
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
-  clustering_mode <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=4,
     steps_to_run=steps_to_run,
-    step_name="clustering_mode",
+    step_name="stable_clustering",
     step_fn=function(){
-      clustering_mode <- GetSubsampleClusteringMode(assignment_probabilities)
-      checkpoint[["clustering_mode"]] <<- clustering_mode
+      stable_clustering <- FindStableClustering(
+        assignment_frequencies=checkpoint[["assignment_frequencies"]]
+      )
+      checkpoint[["stable_clustering"]] <<- stable_clustering
       if(!is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(clustering_mode)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
-  cell_stability_score <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=5,
     steps_to_run=steps_to_run,
     step_name="cell_stability_score",
     step_fn=function(){
       cell_stability_score <- CalculateCellStabilityScore(
-        assignment_probabilities=assignment_probabilities,
+        assignment_frequencies=checkpoint[["assignment_frequencies"]],
         metric=cell_stability_metric,
         normalize=TRUE
       )
       checkpoint[["cell_stability_score"]] <<- cell_stability_score
 
       if(!is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(cell_stability_score)
+      return(checkpoint)
     }
   )
-
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
   # Testing
-  marker_alignment <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=6,
     steps_to_run=steps_to_run,
@@ -398,74 +446,81 @@ StabCell <- function(
     step_fn=function(){
       if(verbose) message("testing...\n")
       marker_alignment <- MarkerStabilityAlignment(
-        reference_identities=clustering_mode,
-        subsampling_identities=subsampling_identities
+        reference_identities=if(!is.null(checkpoint[["stable_clustering"]])) checkpoint[["stable_clustering"]] else checkpoint[["reference_identities"]],
+        subsampling_identities=checkpoint[["subsampling_identities"]]
       )
       checkpoint[["marker_alignment"]] <<- marker_alignment
-      return(marker_alignment)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
-  subsampling_p_values <- run_step(
+
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=7,
     steps_to_run=steps_to_run,
     step_name="subsampling_p_values",
     step_fn=function(){
-      subsampling_p_values <- SubsampleTesting(
+      subsampling_p_values <- SubsampleMarkers(
         data=data,
-        reference_identities=clustering_mode,
-        subsampling_identities=subsampling_identities,
-        marker_alignment=marker_alignment,
-        cell_stability_score=cell_stability_score,
-        test_fn=test_fn,
-        test_args=test_args,
-        test_global=test_global,
-        test_local=test_local,
-        observations_in_columns=cells_in_columns,
+        reference_identities=if(!is.null(checkpoint[["stable_clustering"]])) checkpoint[["stable_clustering"]] else checkpoint[["reference_identities"]],
+        subsampling_identities=checkpoint[["subsampling_identities"]],
+        marker_alignment=checkpoint[["marker_alignment"]],
+        cell_stability_score=checkpoint[["cell_stability_score"]],
+        marker_fn=marker_fn,
+        marker_args=marker_args,
+        marker_global=marker_global,
+        marker_local=marker_local,
+        cells_in_columns=cells_in_columns,
         packages=packages,
         export=export,
         verbose=verbose
       )
       checkpoint[["subsampling_p_values"]] <<- subsampling_p_values
-
       if(!is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(subsampling_p_values)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
+
 
   # selection frequencies
-  selection_frequencies <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=8,
     steps_to_run=steps_to_run,
-    step_name="selection_frequencies",
+    step_name="marker_selection_frequencies",
     step_fn=function(){
-      if(verbose) message("calculate selection frequency...\n")
-      selection_frequencies <- CalculateSelectionFrequency(
-        subsampling_p_values=subsampling_p_values,
+      if(verbose) message("calculate marker selection frequency...\n")
+      marker_selection_frequencies <- CalculateMarkerSelectionFrequency(
+        subsampling_p_values=checkpoint[["subsampling_p_values"]],
         p_value_threshold=p_value_threshold,
         n_subsample_markers=n_subsample_markers,
         ranking=ranking
       )
-      checkpoint[["selection_frequencies"]] <<- selection_frequencies
+      checkpoint[["marker_selection_frequencies"]] <<- marker_selection_frequencies
 
       if(!is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(selection_frequencies)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
   # stable markers
-  stable_markers_global <- run_step(
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=9,
     steps_to_run=steps_to_run,
     step_name="stable_markers_global",
     step_fn=function(){
-      if(test_global){
+      if(marker_global){
         if(verbose) message("find global markers...\n")
         stable_markers_global <- FindAllGlobalStableMarkers(
-          selection_frequencies=selection_frequencies,
+          marker_selection_frequencies=checkpoint[["marker_selection_frequencies"]],
           PFER_max=PFER_max,
           assumption=assumption,
           B=subsampling_iterations,
@@ -476,21 +531,24 @@ StabCell <- function(
       }
       checkpoint[["stable_markers_global"]] <<- stable_markers_global
 
-      if(test_global && !is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(stable_markers_global)
+      if(marker_global && !is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
 
-  stable_markers_local <- run_step(
+
+  step_result <- run_step(
     checkpoint=checkpoint,
     step_index=10,
     steps_to_run=steps_to_run,
     step_name="stable_markers_local",
     step_fn=function(){
-      if(test_local){
+      if(marker_local){
         if(verbose) message("find local markers...\n")
         stable_markers_local <- FindAllLocalStableMarkers(
-          selection_frequencies=selection_frequencies,
+          marker_selection_frequencies=checkpoint[["marker_selection_frequencies"]],
           PFER_max=PFER_max,
           assumption=assumption,
           B=subsampling_iterations,
@@ -499,13 +557,16 @@ StabCell <- function(
       } else {
         stable_markers_local <- NULL
       }
-
       checkpoint[["stable_markers_local"]] <<- stable_markers_local
 
-      if(test_local && !is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
-      return(stable_markers_local)
+      if(marker_local && !is.null(checkpoint_path)) save(checkpoint, file=checkpoint_path)
+      return(checkpoint)
     }
   )
+  checkpoint <- step_result$result
+  if(!step_result$success){ abort_message(); return(checkpoint) }
+
+
 
   if(verbose) message("done!\n")
 

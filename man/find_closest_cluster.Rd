@@ -26,7 +26,7 @@ function finds the closest cluster in terms of Jaccard similarity in a vector
 of comparison allocations.
 }
 \examples{
-\dontshow{if (FALSE) withAutoprint(\{ # examplesIf}
+\dontshow{if (FALSE) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
 find_closest_cluster(c(1, 1, 2, 3), 1, c(2, 2, 2, 4))
 \dontshow{\}) # examplesIf}
 }

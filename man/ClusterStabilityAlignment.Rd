@@ -15,11 +15,11 @@ corresponds to a subsampling clustering. The number of columns must
 match the length of the reference identities.}
 }
 \value{
-A \code{data.frame} with a columns for the subsample ID, the subsample
+A \code{data.frame} with a columns for the subsample ID (row), the subsample
         cluster ID, and the aligned reference cluster ID.
 }
 \description{
-For each cluster in each subsampling clustering, find the closest cluster (in
+For each cluster in each subsample clustering, find the closest cluster (in
 terms of Jaccard similarity) in the reference clustering. \code{NaN} values in
 each subsample clustering are treated as "not sampled" and will be filtered
 out from reference and subsample clusterings.

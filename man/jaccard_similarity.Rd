@@ -20,7 +20,7 @@ It is sometimes also referred to as 'intersection over union'.
 \deqn{\frac{A \cap B}{A \cup B}}
 }
 \examples{
-\dontshow{if (FALSE) withAutoprint(\{ # examplesIf}
+\dontshow{if (FALSE) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
 jaccard_similarity(c(T, T, T), c(T, T, F))
 \dontshow{\}) # examplesIf}
 }

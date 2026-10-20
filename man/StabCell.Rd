@@ -6,16 +6,16 @@
 \usage{
 StabCell(
   data,
-  reference_identities,
   cluster_fn,
-  test_fn,
   PFER_max,
+  reference_identities = NULL,
+  marker_fn = NULL,
   p_value_threshold = 0.05,
   n_subsample_markers = NULL,
   cluster_args = NULL,
-  test_args = NULL,
-  test_global = TRUE,
-  test_local = FALSE,
+  marker_args = NULL,
+  marker_global = TRUE,
+  marker_local = FALSE,
   subsampling_iterations = 50,
   subsampling_fraction = 0.5,
   complementary_pairs = TRUE,
@@ -36,9 +36,6 @@ StabCell(
 \item{data}{A matrix- or data frame-like object containing the counts of
 gene-cell-pairs.}
 
-\item{reference_identities}{A vector of initial cluster labels. Usually a
-clustering of observations independent of \emph{StabCell} is used here.}
-
 \item{cluster_fn}{A function which takes the following correctly named
 arguments:
 \itemize{
@@ -53,7 +50,13 @@ It must return a **numeric** or **factor** vector of cluster labels for
 each observation in the subsample. Factor labels will be disregarded for
 their numeric level indicator.}
 
-\item{test_fn}{A function which calculates \eqn{p}-values for a subsample of
+\item{PFER_max}{The maximum number of expected variables with low selection
+probability being selected.}
+
+\item{reference_identities}{A vector of initial cluster labels. Usually a
+clustering of observations independent of \emph{StabCell} is used here.}
+
+\item{marker_fn}{A function which calculates \eqn{p}-values for a subsample of
 the dataset. It is required to have the following correctly named
 arguments:
 \itemize{
@@ -62,20 +65,17 @@ arguments:
   \item \code{weights}: The observation stability scores will be
         handed over for weighted testing. Can be ignored in the function
         body if unweighted testing is desired.
-  \item \code{test_id1}: A single cluster label from in \code{identities}
+  \item \code{cluster_id1}: A single cluster label from in \code{identities}
         for which the test is performed.
-  \item \code{test_id2}: A single cluster label from in \code{identities}
+  \item \code{cluster_id2}: A single cluster label from in \code{identities}
         for which the test is performed. If \code{NA} is used, a global
-        (1 vs rest) test for cluster \code{test_id1} should be performed,
-        otherwise a local (1 vs 1) test for clusters \code{test_id1}
-        and \code{test_id2} should be performed.
-  \item \code{test_args}: Additional arguments that may be used.
+        (1 vs rest) test for cluster \code{cluster_id1} should be performed,
+        otherwise a local (1 vs 1) test for clusters \code{cluster_id1}
+        and \code{cluster_id2} should be performed.
+  \item \code{marker_args}: Additional arguments that may be used.
 }
 It should return a named vector of \eqn{p}-values with the corresponding
 gene as name.}
-
-\item{PFER_max}{The maximum number of expected variables with low selection
-probability being selected.}
 
 \item{p_value_threshold}{A numeric value indicating which genes are treated as
 markers in each subsample's testing procedure. Defaults to \code{0.05}.}
@@ -86,13 +86,13 @@ subsample. Should be large enough to select all informative marker genes.}
 \item{cluster_args}{Additional objects that will be passed to \code{cluster_fn}.
 Defaults to \code{NULL}.}
 
-\item{test_args}{Additional objects that will be passed to \code{test_fn}.
+\item{marker_args}{Additional objects that will be passed to \code{marker_fn}.
 Defaults to \code{NULL}.}
 
-\item{test_global}{A boolean flag whether to perform testing for global markers
+\item{marker_global}{A boolean flag whether to perform testing for global markers
 (1 vs rest). Defaults to \code{TRUE}.}
 
-\item{test_local}{A boolean flag whether to perform testing for local markers
+\item{marker_local}{A boolean flag whether to perform testing for local markers
 (1 vs 1). Defaults to \code{FALSE}.}
 
 \item{subsampling_iterations}{An integer specifying how often the subsampling
@@ -126,18 +126,19 @@ one is used in case of ties. Defaults to \code{"p_val"}.}
 
 \item{theta}{The probability threshold to divide the variables into the set of
 variables with low and with high selection probability. Defaults to
-\code{NULL}, which is only permissible is \code{assumption == "none"}.}
+\code{NULL}, which is only permissible is \code{assumption == "none"}.
+For other assumptions the ratio \eqn{q/p} will be used.}
 
 \item{cells_in_columns}{A boolean flag indicating whether the columns
 of \code{data} correspond to observations (i.e. cells) or not. Defaults
 to \code{TRUE}.}
 
 \item{packages}{A character vector of package names that are used by
-\code{cluster_fn} and \code{test_fn}. Needed for parallelization worker
+\code{cluster_fn}, \code{marker_fn} or \code{graph_fn}. Needed for parallelization worker
 setup. Common choice may be \code{"Seurat"}. Defaults to \code{NULL}.}
 
 \item{export}{A character vector of (custom) object names that are used by
-\code{cluster_fn} & \code{test_fn} and are not covered by
+\code{cluster_fn} & \code{marker_fn} and are not covered by
 \code{packages}. Needed for parallelization worker setup. Defaults to
 \code{NULL}.}
 
@@ -165,28 +166,28 @@ A named list with results of each step that is performed
            \item \code{clustering_alignment}: A data frame which aligns a
                  cluster from \code{reference_identities} to every cluster in
                  every subsample clustering.
-           \item \code{assignment_probabilities}: A data frame with assignment
-                 probabilities for every observation to every cluster in
+           \item \code{assignment_frequencies}: A data frame with assignment
+                 frequencies for every observation to every cluster in
                  \code{reference_identities}.
-           \item \code{clustering_mode}: A vector of cluster labels
-                 corresponding to the highest \code{assignment_probabilities}.
+           \item \code{stable_clustering}: A vector of cluster labels
+                 corresponding to the highest \code{assignment_frequencies}.
            \item \code{cell_stability_score}: A numeric vector with
                  stability scores of every cell. Higher scores indicate more
                  consistent assignment to the same reference cluster.
            \item \code{marker_alignment}: A data frame which aligns a cluster
-                 from every subsample to every cluster in \code{clustering_mode}.
+                 from every subsample to every cluster in \code{stable_clustering}.
            \item \code{subsampling_p_values}: A data frame with \eqn{p}-values
-                 for every cluster (pair) in \code{clustering_mode} and every
+                 for every cluster (pair) in \code{stable_clustering} and every
                  gene in every subsample.
-           \item \code{selection_frequencies}: A data frame with selection
+           \item \code{marker_selection_frequencies}: A data frame with selection
                  frequencies for every gene and every cluster (pair) depending
                  on \code{p_value_threshold}.
            \item \code{stable_markers_global}: A data frame with globally
-                 stable markers for each cluster in \code{clustering_mode}
+                 stable markers for each cluster in \code{stable_clustering}
                  depending on \code{p_value_threshold} and
-                 \code{selection_frequency_threshold}.
+                 \code{marker_selection_frequency_threshold}.
            \item \code{stable_markers_local}: A data frame with locally stable
-                 markers for each pair of clusters in \code{clustering_mode}
+                 markers for each pair of clusters in \code{stable_clustering}
                  depending on \code{p_value_threshold} and
                  \code{selection_frequency_threshold}.
         }
@@ -198,11 +199,11 @@ differentially expressed marker genes. Performed steps are
    \item \code{\link{SubsampleClustering}}
    \item \code{\link{ClusterStabilityAlignment}}
    \item \code{\link{CalculateAssignmentProbabilities}}
-   \item \code{\link{GetSubsampleClusteringMode}}
+   \item \code{\link{FindStableClustering}}
    \item \code{\link{CalculateCellStabilityScore}}
    \item \code{\link{MarkerStabilityAlignment}}
-   \item \code{\link{SubsampleTesting}}
-   \item \code{\link{CalculateSelectionFrequency}}
+   \item \code{\link{SubsampleMarkers}}
+   \item \code{\link{CalculateMarkerSelectionFrequency}}
    \item \code{\link{FindAllGlobalStableMarkers}}
    \item \code{\link{FindAllLocalStableMarkers}}
 }
